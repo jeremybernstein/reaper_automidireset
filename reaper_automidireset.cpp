@@ -48,6 +48,7 @@ bool RegisterDeviceInterfaceToHwnd(HWND hwnd, HDEVNOTIFY *hDeviceNotify);
 DWORD WINAPI window_thread(LPVOID params);
 DWORD WINAPI check_thread_midi(LPVOID params);
 HWND hDummyWindow;
+#define WM_MIDI_REINIT (WM_USER + 1)
 
 #else
 
@@ -142,8 +143,14 @@ INT_PTR WINAPI midi_hardware_status_callback(HWND hwnd, UINT msg, WPARAM wParam,
   PDEV_BROADCAST_HDR pbdi;
   PDEV_BROADCAST_DEVICEINTERFACE pdi;
   static HDEVNOTIFY hDeviceNotify;
+  static bool deviceNotified = false;
 
   switch (msg) {
+  case WM_MIDI_REINIT:
+    //ShowConsoleMsg("MIDI Reinit\n");
+    midi_reinit();
+    break;
+
   case WM_CREATE:
     if (!RegisterDeviceInterfaceToHwnd(hwnd, &hDeviceNotify)) {
       assert(false && "failed to register device interface");
@@ -175,7 +182,6 @@ INT_PTR WINAPI midi_hardware_status_callback(HWND hwnd, UINT msg, WPARAM wParam,
 
       pdi = (PDEV_BROADCAST_DEVICEINTERFACE) pbdi;
 
-      // if (pdi->dbcc_classguid != GUID_AUDIO_DEVIFACE) {
       if (!IsEqualGUID(pdi->dbcc_classguid, GUID_AUDIO_DEVIFACE)) {
         break;
       }
@@ -184,8 +190,7 @@ INT_PTR WINAPI midi_hardware_status_callback(HWND hwnd, UINT msg, WPARAM wParam,
       Device check needs to be scheduled
       See comment in check_thread_audio/midi
       */
-      ScheduleMidiCheck();
-
+      deviceNotified = true;
       break;
 
     case DBT_DEVICEREMOVECOMPLETE:
@@ -197,13 +202,18 @@ INT_PTR WINAPI midi_hardware_status_callback(HWND hwnd, UINT msg, WPARAM wParam,
 
       pdi = (PDEV_BROADCAST_DEVICEINTERFACE) pbdi;
 
-      // if (pdi->dbcc_classguid != GUID_AUDIO_DEVIFACE) {
       if (!IsEqualGUID(pdi->dbcc_classguid, GUID_AUDIO_DEVIFACE)) {
         break;
       }
 
-      ScheduleMidiCheck();
+      deviceNotified = true;
+      break;
 
+    case DBT_DEVNODES_CHANGED:
+      if (deviceNotified) {
+        ScheduleMidiCheck();
+        deviceNotified = false;
+      }
       break;
     }
 
@@ -261,7 +271,7 @@ DWORD WINAPI check_thread_midi(LPVOID _)
   */
 
   Sleep(500);
-  midi_reinit();
+  PostMessage(hDummyWindow, WM_MIDI_REINIT, 0, 0);
   return 0;
 }
 
