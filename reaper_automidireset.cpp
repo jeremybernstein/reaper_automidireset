@@ -66,8 +66,9 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
 static void notifyProc(const MIDINotification *message, void *refCon)
 {
   if (message && message->messageID == 1) {
-    // ShowConsoleMsg("change!\n");
-    midi_reinit();
+    dispatch_async(dispatch_get_main_queue(), ^{
+      midi_reinit();
+    });
   }
 }
 
