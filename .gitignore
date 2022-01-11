@@ -1,2 +1,7 @@
 .DS_Store
 *.dylib
+*.exp
+*.lib
+*.pdb
+*.dll
+*.obj
