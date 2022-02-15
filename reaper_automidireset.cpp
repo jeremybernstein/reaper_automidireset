@@ -35,8 +35,6 @@
 
 static int commandId = 0;
 
-#define REAPER_MIDI_INIT
-
 #ifdef WIN32
 
 // Windows refresh code adapted from http://faudio.github.io/faudio/
@@ -55,33 +53,23 @@ DWORD WINAPI window_thread(LPVOID params);
 DWORD WINAPI check_thread_midi(LPVOID params);
 HWND hDummyWindow;
 #define WM_MIDI_REINIT (WM_USER + 1)
-
-#ifdef REAPER_MIDI_INIT
 #define WM_MIDI_INIT (WM_USER + 2)
-#endif
 
 #else
 
 #include <CoreMIDI/CoreMIDI.h>
 static void notifyProc(const MIDINotification *message, void *refCon);
 static MIDIClientRef g_MIDIClient = 0;
-
-#ifdef REAPER_MIDI_INIT
 static dispatch_source_t dispatchSource = nullptr;
-#endif
 
 #endif
-
-#ifdef REAPER_MIDI_INIT
 
 #include <vector>
 std::vector<bool> inputsList;
 std::vector<bool> outputsList;
+
 static void initLists();
 static void updateLists();
-
-#endif
-
 static bool loadAPI(void *(*getFunc)(const char *));
 static void registerCustomAction();
 static bool showInfo(KbdSectionInfo *sec, int command, int val, int val2, int relmode, HWND hwnd);
@@ -112,12 +100,10 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
   OSStatus err;
 
   if (!rec) {
-#ifdef REAPER_MIDI_INIT
     if (dispatchSource) {
       dispatch_source_cancel(dispatchSource);
       dispatchSource = nullptr;
     }
-#endif
     if (g_MIDIClient) {
       MIDIClientDispose(g_MIDIClient);
       g_MIDIClient = 0;
@@ -130,11 +116,9 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
     return 0;
   }
 
-#ifdef REAPER_MIDI_INIT
   dispatch_async(dispatch_get_main_queue(), ^{
     initLists();
   });
-#endif
 
   // set up MIDI Client for this instance
   err = MIDIClientCreate(CFSTR("reaper_automidireset"), (MIDINotifyProc)notifyProc, NULL, &g_MIDIClient);
@@ -155,10 +139,7 @@ bool showInfo(KbdSectionInfo *sec, int command, int val, int val2, int relmode, 
   char infoString[512];
   snprintf(infoString, 512, "automidireset\nPlug-and-play MIDI devices\n\nVersion %s\n%s\n\nCopyright (c) 2022 Jeremy Bernstein\njeremy.d.bernstein@googlemail.com%s",
            VERSION_STRING, __DATE__,
-#ifdef REAPER_MIDI_INIT
-           !midi_init ? "\n\nPlease update to REAPER 6.47+ for the most reliable experience." :
-#endif
-           "");
+           !midi_init ? "\n\nPlease update to REAPER 6.47+ for the most reliable experience." : "");
   ShowConsoleMsg(infoString);
   return true;
 }
@@ -176,7 +157,6 @@ void registerCustomAction()
   plugin_register("hookcommand2", (void*)&showInfo);
 }
 
-#ifdef REAPER_MIDI_INIT
 static void initLists()
 {
   if (!midi_init) return;
@@ -232,7 +212,6 @@ static void updateLists()
     }
   }
 }
-#endif
 
 #ifdef WIN32
 
@@ -271,20 +250,14 @@ INT_PTR WINAPI midi_hardware_status_callback(HWND hwnd, UINT msg, WPARAM wParam,
 
   switch (msg) {
 
-#ifdef REAPER_MIDI_INIT
   case WM_MIDI_INIT:
     initLists();
     break;
-#endif
 
   case WM_MIDI_REINIT:
     //ShowConsoleMsg("MIDI Reinit\n");
-#ifdef REAPER_MIDI_INIT
     midi_reinit(); // this looks like overkill, but appears to be necessary on some systems
     updateLists();
-#else
-    midi_reinit();
-#endif
     break;
 
   case WM_CREATE:
@@ -384,9 +357,7 @@ DWORD WINAPI window_thread(LPVOID params)
     ShowWindow(hDummyWindow, SW_HIDE);
   }
 
-#ifdef REAPER_MIDI_INIT
   PostMessage(hDummyWindow, WM_MIDI_INIT, 0, 0); // call initLists();
-#endif
 
   MSG msg;
 
@@ -410,11 +381,7 @@ DWORD WINAPI check_thread_midi(LPVOID _)
   It works but it's not pretty.
   */
 
-#ifdef REAPER_MIDI_INIT
   Sleep(midi_init ? 1500 : 500); // REAPER requires addl ~1s to update its internal state, midi_reinit does not
-#else
-  Sleep(500);
-#endif
 
   PostMessage(hDummyWindow, WM_MIDI_REINIT, 0, 0);
   return 0;
@@ -425,7 +392,6 @@ DWORD WINAPI check_thread_midi(LPVOID _)
 static void notifyProc(const MIDINotification *message, void *refCon)
 {
   if (message && message->messageID == 1) {
-#ifdef REAPER_MIDI_INIT
     if (midi_init) {
       if (!dispatchSource) {
         dispatchSource = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, dispatch_get_main_queue());
@@ -448,11 +414,6 @@ static void notifyProc(const MIDINotification *message, void *refCon)
         midi_reinit();
       });
     }
-#else
-    dispatch_async(dispatch_get_main_queue(), ^{
-      midi_reinit();
-    });
-#endif
   }
 }
 #endif
@@ -474,13 +435,11 @@ static bool loadAPI(void *(*getFunc)(const char *))
 
   const ApiFunc funcs[] {
     REQUIRED_API(ShowConsoleMsg),
-#ifdef REAPER_MIDI_INIT
     REQUIRED_API(GetNumMIDIInputs),
     REQUIRED_API(GetNumMIDIOutputs),
     REQUIRED_API(GetMIDIInputName),
     REQUIRED_API(GetMIDIOutputName),
     OPTIONAL_API(midi_init),
-#endif
     REQUIRED_API(midi_reinit),
     REQUIRED_API(plugin_register),
   };
