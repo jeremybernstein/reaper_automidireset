@@ -31,6 +31,10 @@
 #include "reaper_plugin_functions.h"
 #include <cstdio>
 
+#define VERSION_STRING "1.2-beta.2"
+
+static int commandId = 0;
+
 #define REAPER_MIDI_INIT
 
 #ifdef WIN32
@@ -79,6 +83,8 @@ static void updateLists();
 #endif
 
 static bool loadAPI(void *(*getFunc)(const char *));
+static void registerCustomAction();
+static bool showInfo(KbdSectionInfo *sec, int command, int val, int val2, int relmode, HWND hwnd);
 
 extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
   REAPER_PLUGIN_HINSTANCE instance, reaper_plugin_info_t *rec)
@@ -138,45 +144,76 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
 
 #endif
 
-  // ShowConsoleMsg("Hello World!\n");
-
+  registerCustomAction();
   return 1;
+}
+
+bool showInfo(KbdSectionInfo *sec, int command, int val, int val2, int relmode, HWND hwnd)
+{
+  if (command != commandId) return false;
+
+  char infoString[512];
+  snprintf(infoString, 512, "automidireset\nPlug-and-play MIDI devices\n\nVersion %s\n%s\n\nCopyright (c) 2022 Jeremy Bernstein\njeremy.d.bernstein@googlemail.com%s",
+           VERSION_STRING, __DATE__,
+#ifdef REAPER_MIDI_INIT
+           !midi_init ? "\n\nPlease update to REAPER 6.47+ for the most reliable experience." :
+#endif
+           "");
+  ShowConsoleMsg(infoString);
+  return true;
+}
+
+void registerCustomAction()
+{
+  custom_action_register_t action {
+    0,
+    "SM72_AMSINFO",
+    "reaper_automidireset: Plug-and-play MIDI devices",
+    nullptr
+  };
+
+  commandId = plugin_register("custom_action", &action);
+  plugin_register("hookcommand2", (void*)&showInfo);
 }
 
 #ifdef REAPER_MIDI_INIT
 static void initLists()
 {
-  char dummy[512];
+  if (!midi_init) return;
+
+  char portName[512];
   inputsList.clear();
   int numMIDIInputs = GetNumMIDIInputs();
   for (int i = 0; i < numMIDIInputs; i++) {
-    dummy[0] = '\0';
-    bool inputAttached = GetMIDIInputName(i, dummy, 512);
+    portName[0] = '\0';
+    bool inputAttached = GetMIDIInputName(i, portName, 512);
     inputsList.push_back(inputAttached);
     // char cslMsg[512];
-    // snprintf(cslMsg, 512, "MIDI Init INPUT %d %s (%d)\n", i, dummy, inputAttached);
+    // snprintf(cslMsg, 512, "MIDI Init INPUT %d %s (%d)\n", i, portName, inputAttached);
     // ShowConsoleMsg(cslMsg);
   }
   int numMIDIOutputs = GetNumMIDIOutputs();
   for (int i = 0; i < numMIDIOutputs; i++) {
-    dummy[0] = '\0';
-    bool outputAttached = GetMIDIOutputName(i, dummy, 512);
+    portName[0] = '\0';
+    bool outputAttached = GetMIDIOutputName(i, portName, 512);
     outputsList.push_back(outputAttached);
     // char cslMsg[512];
-    // snprintf(cslMsg, 512, "MIDI Init OUTPUT %d %s (%d)\n", i, dummy, outputAttached);
+    // snprintf(cslMsg, 512, "MIDI Init OUTPUT %d %s (%d)\n", i, portName, outputAttached);
     // ShowConsoleMsg(cslMsg);
   }
 }
 
 static void updateLists()
 {
+  if (!midi_init) return;
+
   int numMIDIInputs = GetNumMIDIInputs();
   for (int i = 0; i < numMIDIInputs; i++) {
     char inputName[512] = "";
     bool inputAttached = GetMIDIInputName(i, inputName, 512);
     if (*inputName && inputsList[i] != inputAttached) {
       // char cslMsg[512];
-      // snprintf(cslMsg, 512, "MIDI Init INPUT %d %s (was %d, now %d)\n", i, inputName, inputsList[i], inputAttached);
+      // snprintf(cslMsg, 512, "MIDI Init INPUT %d %s (was %d, now %d)\n", i, inputName, inputsList[i] ? 1 : 0, inputAttached);
       // ShowConsoleMsg(cslMsg);
       midi_init(i, -1);
       inputsList[i] = inputAttached;
@@ -188,7 +225,7 @@ static void updateLists()
     bool outputAttached = GetMIDIOutputName(i, outputName, 512);
     if (*outputName && outputsList[i] != outputAttached) {
       // char cslMsg[512];
-      // snprintf(cslMsg, 512, "MIDI Init OUTPUT %d %s (was %d, now %d)\n", i, outputName, outputsList[i], outputAttached);
+      // snprintf(cslMsg, 512, "MIDI Init OUTPUT %d %s (was %d, now %d)\n", i, outputName, outputsList[i] ? 1 : 0, outputAttached);
       // ShowConsoleMsg(cslMsg);
       midi_init(-1, i);
       outputsList[i] = outputAttached;
@@ -347,7 +384,9 @@ DWORD WINAPI window_thread(LPVOID params)
     ShowWindow(hDummyWindow, SW_HIDE);
   }
 
+#ifdef REAPER_MIDI_INIT
   PostMessage(hDummyWindow, WM_MIDI_INIT, 0, 0); // call initLists();
+#endif
 
   MSG msg;
 
@@ -372,7 +411,7 @@ DWORD WINAPI check_thread_midi(LPVOID _)
   */
 
 #ifdef REAPER_MIDI_INIT
-  Sleep(1500); // REAPER requires addl ~1s to update its internal state
+  Sleep(midi_init ? 1500 : 500); // REAPER requires addl ~1s to update its internal state, midi_reinit does not
 #else
   Sleep(500);
 #endif
@@ -387,20 +426,27 @@ static void notifyProc(const MIDINotification *message, void *refCon)
 {
   if (message && message->messageID == 1) {
 #ifdef REAPER_MIDI_INIT
-    if (!dispatchSource) {
-      dispatchSource = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, dispatch_get_main_queue());
+    if (midi_init) {
+      if (!dispatchSource) {
+        dispatchSource = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, dispatch_get_main_queue());
+        if (dispatchSource) {
+          dispatch_source_set_event_handler(dispatchSource, ^{
+            midi_reinit();
+            updateLists();
+            dispatch_suspend(dispatchSource);
+          });
+        }
+      }
       if (dispatchSource) {
-        dispatch_source_set_event_handler(dispatchSource, ^{
-          midi_reinit();
-          updateLists();
-          dispatch_suspend(dispatchSource);
-        });
+        // REAPER requires ~1s to update its internal state, midi_reinit does not
+        dispatch_source_set_timer(dispatchSource, dispatch_time(DISPATCH_TIME_NOW, NSEC_PER_SEC), DISPATCH_TIME_FOREVER /* one-shot */, 0);
+        dispatch_resume(dispatchSource);
       }
     }
-    if (dispatchSource) {
-      // REAPER requires ~1s to update its internal state
-      dispatch_source_set_timer(dispatchSource, dispatch_time(DISPATCH_TIME_NOW, NSEC_PER_SEC), DISPATCH_TIME_FOREVER /* one-shot */, 0);
-      dispatch_resume(dispatchSource);
+    else {
+      dispatch_async(dispatch_get_main_queue(), ^{
+        midi_reinit();
+      });
     }
 #else
     dispatch_async(dispatch_get_main_queue(), ^{
@@ -433,9 +479,10 @@ static bool loadAPI(void *(*getFunc)(const char *))
     REQUIRED_API(GetNumMIDIOutputs),
     REQUIRED_API(GetMIDIInputName),
     REQUIRED_API(GetMIDIOutputName),
-    REQUIRED_API(midi_init),
+    OPTIONAL_API(midi_init),
 #endif
     REQUIRED_API(midi_reinit),
+    REQUIRED_API(plugin_register),
   };
 
   for (const ApiFunc &func : funcs) {
