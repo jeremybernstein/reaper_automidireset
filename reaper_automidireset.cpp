@@ -61,6 +61,7 @@ HWND hDummyWindow;
 static void notifyProc(const MIDINotification *message, void *refCon);
 static MIDIClientRef g_MIDIClient = 0;
 static dispatch_source_t dispatchSource = nullptr;
+static bool dispatchSourceSuspended = true;
 
 #endif
 
@@ -102,6 +103,10 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
   if (!rec) {
     if (dispatchSource) {
       dispatch_source_cancel(dispatchSource);
+      if (dispatchSourceSuspended) {
+        dispatch_resume(dispatchSource); // must be resumed to release
+      }
+      dispatch_release(dispatchSource);
       dispatchSource = nullptr;
     }
     if (g_MIDIClient) {
@@ -396,17 +401,23 @@ static void notifyProc(const MIDINotification *message, void *refCon)
       if (!dispatchSource) {
         dispatchSource = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, dispatch_get_main_queue());
         if (dispatchSource) {
+          dispatchSourceSuspended = true;
+          dispatch_retain(dispatchSource);
           dispatch_source_set_event_handler(dispatchSource, ^{
             midi_reinit();
             updateLists();
             dispatch_suspend(dispatchSource);
+            dispatchSourceSuspended = true;
           });
         }
       }
       if (dispatchSource) {
         // REAPER requires ~1s to update its internal state, midi_reinit does not
         dispatch_source_set_timer(dispatchSource, dispatch_time(DISPATCH_TIME_NOW, NSEC_PER_SEC), DISPATCH_TIME_FOREVER /* one-shot */, 0);
-        dispatch_resume(dispatchSource);
+        if (dispatchSourceSuspended) {
+          dispatch_resume(dispatchSource);
+          dispatchSourceSuspended = false;
+        }
       }
     }
     else {
