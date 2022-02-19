@@ -47,10 +47,9 @@ static int commandId = 0;
 static const GUID GUID_AUDIO_DEVIFACE = {0x6994AD04L, 0x93EF, 0x11D0, {0xA3, 0xCC, 0x00, 0xA0, 0xC9, 0x22, 0x31, 0x96}};
 static WCHAR WND_CLASS_MIDI_NAME[] = L"midiDummyWindow";
 #define kMidiDeviceType ((void*) 1)
-void ScheduleMidiCheck();
+void CALLBACK ScheduleMidiCheck(HWND hwnd, UINT uMsg, UINT timerId, DWORD dwTime);
 bool RegisterDeviceInterfaceToHwnd(HWND hwnd, HDEVNOTIFY *hDeviceNotify);
 DWORD WINAPI window_thread(LPVOID params);
-DWORD WINAPI check_thread_midi(LPVOID params);
 HWND hDummyWindow;
 #define WM_MIDI_REINIT (WM_USER + 1)
 #define WM_MIDI_INIT (WM_USER + 2)
@@ -132,7 +131,7 @@ bool showInfo(KbdSectionInfo *sec, int command, int val, int val2, int relmode, 
   if (command != commandId) return false;
 
   char infoString[512];
-  snprintf(infoString, 512, "automidireset\nPlug-and-play MIDI devices\n\nVersion %s\n%s\n\nCopyright (c) 2022 Jeremy Bernstein\njeremy.d.bernstein@googlemail.com%s",
+  snprintf(infoString, 512, "automidireset // sockmonkey72\nPlug-and-play MIDI devices\n\nVersion %s\n%s\n\nCopyright (c) 2022 Jeremy Bernstein\njeremy.d.bernstein@googlemail.com%s",
            VERSION_STRING, __DATE__,
            !midi_init ? "\n\nPlease update to REAPER 6.47+ for the most reliable experience." : "");
   ShowConsoleMsg(infoString);
@@ -210,11 +209,6 @@ static void updateLists()
 
 #ifdef WIN32
 
-void ScheduleMidiCheck()
-{
-  CloseHandle(CreateThread(NULL, 0, check_thread_midi, (LPVOID) NULL, 0, 0));
-}
-
 bool RegisterDeviceInterfaceToHwnd(HWND hwnd, HDEVNOTIFY *hDeviceNotify)
 {
 
@@ -235,13 +229,18 @@ bool RegisterDeviceInterfaceToHwnd(HWND hwnd, HDEVNOTIFY *hDeviceNotify)
   return true;
 }
 
+void CALLBACK ScheduleMidiCheck(HWND hwnd, UINT uMsg, UINT timerId, DWORD dwTime)
+{
+  PostMessage(hDummyWindow, WM_MIDI_REINIT, 0, 0);
+  KillTimer(hwnd, 0);
+}
+
 INT_PTR WINAPI midi_hardware_status_callback(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
   LRESULT lRet = 0;
   PDEV_BROADCAST_HDR pbdi;
   PDEV_BROADCAST_DEVICEINTERFACE pdi;
   static HDEVNOTIFY hDeviceNotify;
-  static bool deviceNotified = false;
 
   switch (msg) {
 
@@ -291,10 +290,14 @@ INT_PTR WINAPI midi_hardware_status_callback(HWND hwnd, UINT msg, WPARAM wParam,
       }
 
       /*
-      Device check needs to be scheduled
-      See comment in check_thread_audio/midi
+        midiXXXGetNumDevs() / midiXXXGetDevCaps() does not update until after the
+        WM_DEVICECHANGE message has been dispatched.
+
+        The timer waits for the device list to be updated and then handles the change.
+
+        It works but it's not pretty.
       */
-      deviceNotified = true;
+      SetTimer(hwnd, 0, midi_init ? 1500 : 500, (TIMERPROC)&ScheduleMidiCheck);
       break;
 
     case DBT_DEVICEREMOVECOMPLETE:
@@ -310,14 +313,11 @@ INT_PTR WINAPI midi_hardware_status_callback(HWND hwnd, UINT msg, WPARAM wParam,
         break;
       }
 
-      deviceNotified = true;
+      SetTimer(hwnd, 0, midi_init ? 1500 : 500, (TIMERPROC)&ScheduleMidiCheck);
       break;
 
     case DBT_DEVNODES_CHANGED:
-      if (deviceNotified) {
-        ScheduleMidiCheck();
-        deviceNotified = false;
-      }
+      SetTimer(hwnd, 0, midi_init ? 1500 : 500, (TIMERPROC)&ScheduleMidiCheck);
       break;
     }
 
@@ -364,24 +364,6 @@ DWORD WINAPI window_thread(LPVOID params)
     DispatchMessage(&msg);
   }
 
-  return 0;
-}
-
-DWORD WINAPI check_thread_midi(LPVOID _)
-{
-  /*
-  midiXXXGetNumDevs() / midiXXXGetDevCaps() does not update until after the
-  WM_DEVICECHANGE message has been dispatched.
-
-  This thread launches, waits a short while for device list to be updated
-  and then handles the change.
-
-  It works but it's not pretty.
-  */
-
-  Sleep(midi_init ? 1500 : 500); // REAPER requires addl ~1s to update its internal state, midi_reinit does not
-
-  PostMessage(hDummyWindow, WM_MIDI_REINIT, 0, 0);
   return 0;
 }
 
