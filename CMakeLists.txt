@@ -23,8 +23,9 @@ if (APPLE)
 endif ()
 
 if (WIN32)
-    add_definitions(-DUNICODE)
+    add_definitions(-DUNICODE -D_UNICODE)
     set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+    set(LIBS user32.lib)
 endif ()
 
 

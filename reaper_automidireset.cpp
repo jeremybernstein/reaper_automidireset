@@ -31,7 +31,7 @@
 #include "reaper_plugin_functions.h"
 #include <cstdio>
 
-#define VERSION_STRING "1.2-beta.2"
+#define VERSION_STRING "1.2-beta.3"
 
 static int commandId = 0;
 
@@ -343,13 +343,16 @@ DWORD WINAPI window_thread(LPVOID params)
   wndClass.hInstance = (HINSTANCE) GetModuleHandle(NULL);
 
   if (params == kMidiDeviceType) {
-    wndClass.lpfnWndProc = (WNDPROC) midi_hardware_status_callback;
+    wndClass.lpfnWndProc = (WNDPROC)midi_hardware_status_callback;
     wndClass.lpszClassName = WND_CLASS_MIDI_NAME;
-    assert(RegisterClassEx(&wndClass) && "error registering dummy window");
-    hDummyWindow = CreateWindow(WND_CLASS_MIDI_NAME, L"midi window", WS_ICONIC,
-                                0, 0, CW_USEDEFAULT, 0, NULL, NULL, wndClass.hInstance, NULL);
-    assert((hDummyWindow != NULL) && "failed to create window");
-    ShowWindow(hDummyWindow, SW_HIDE);
+    ATOM registered = RegisterClassEx(&wndClass);
+    if (registered) {
+      hDummyWindow = CreateWindow(WND_CLASS_MIDI_NAME, L"midi window", WS_ICONIC,
+                                  0, 0, CW_USEDEFAULT, 0, NULL, NULL, wndClass.hInstance, NULL);
+      if (hDummyWindow) {
+        ShowWindow(hDummyWindow, SW_HIDE);
+      }
+    }
   }
 
   PostMessage(hDummyWindow, WM_MIDI_INIT, 0, 0); // call initLists();
