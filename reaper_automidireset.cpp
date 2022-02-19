@@ -55,13 +55,11 @@ HWND hDummyWindow;
 #define WM_MIDI_REINIT (WM_USER + 1)
 #define WM_MIDI_INIT (WM_USER + 2)
 
-#else
+#else // APPLE
 
 #include <CoreMIDI/CoreMIDI.h>
 static void notifyProc(const MIDINotification *message, void *refCon);
 static MIDIClientRef g_MIDIClient = 0;
-static dispatch_source_t dispatchSource = nullptr;
-static bool dispatchSourceSuspended = true;
 
 #endif
 
@@ -101,14 +99,6 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
   OSStatus err;
 
   if (!rec) {
-    if (dispatchSource) {
-      dispatch_source_cancel(dispatchSource);
-      if (dispatchSourceSuspended) {
-        dispatch_resume(dispatchSource); // must be resumed to release
-      }
-      dispatch_release(dispatchSource);
-      dispatchSource = nullptr;
-    }
     if (g_MIDIClient) {
       MIDIClientDispose(g_MIDIClient);
       g_MIDIClient = 0;
@@ -398,27 +388,11 @@ static void notifyProc(const MIDINotification *message, void *refCon)
 {
   if (message && message->messageID == 1) {
     if (midi_init) {
-      if (!dispatchSource) {
-        dispatchSource = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, dispatch_get_main_queue());
-        if (dispatchSource) {
-          dispatchSourceSuspended = true;
-          dispatch_retain(dispatchSource);
-          dispatch_source_set_event_handler(dispatchSource, ^{
-            midi_reinit();
-            updateLists();
-            dispatch_suspend(dispatchSource);
-            dispatchSourceSuspended = true;
-          });
-        }
-      }
-      if (dispatchSource) {
-        // REAPER requires ~1s to update its internal state, midi_reinit does not
-        dispatch_source_set_timer(dispatchSource, dispatch_time(DISPATCH_TIME_NOW, NSEC_PER_SEC), DISPATCH_TIME_FOREVER /* one-shot */, 0);
-        if (dispatchSourceSuspended) {
-          dispatch_resume(dispatchSource);
-          dispatchSourceSuspended = false;
-        }
-      }
+      // REAPER requires ~1s to update its internal state, midi_reinit does not
+      dispatch_after(dispatch_time(DISPATCH_TIME_NOW, NSEC_PER_SEC), dispatch_get_main_queue(), ^{
+        midi_reinit();
+        updateLists();
+      });
     }
     else {
       dispatch_async(dispatch_get_main_queue(), ^{
