@@ -31,7 +31,7 @@
 #include "reaper_plugin_functions.h"
 #include <cstdio>
 
-#define VERSION_STRING "1.2-beta.3"
+#define VERSION_STRING "1.2-beta.4"
 
 static int commandId = 0;
 
