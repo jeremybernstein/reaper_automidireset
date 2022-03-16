@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.15)
 
 project(reaper_automidireset
   VERSION
-    1.0.1
+    1.4.0
   DESCRIPTION
     "MIDI hardare plug-and-play for REAPER"
   LANGUAGES
