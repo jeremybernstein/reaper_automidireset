@@ -31,7 +31,7 @@
 #include "reaper_plugin_functions.h"
 #include <cstdio>
 
-#define VERSION_STRING "1.2-beta.4"
+#define VERSION_STRING "1.3-beta.1"
 
 static int commandId = 0;
 
@@ -54,7 +54,28 @@ HWND hDummyWindow;
 #define WM_MIDI_REINIT (WM_USER + 1)
 #define WM_MIDI_INIT (WM_USER + 2)
 
-#else // APPLE
+#elif __linux__
+
+#include <algorithm>
+#include <thread>
+#include <chrono>
+#include <libusb.h>
+
+using std::thread;
+using namespace std::literals;
+
+static libusb_hotplug_callback_handle g_hp[2];
+static thread g_usbServiceThread;
+static bool g_usbInited = false;
+static bool g_eventReceived = false;
+static bool g_listsInited = false;
+typedef void (*timer_function)();
+
+static void reaperTimer();
+static bool is_midi_device(libusb_device *dev, struct libusb_device_descriptor *desc);
+static int hotplug_callback(libusb_context *ctx, libusb_device *dev, libusb_hotplug_event event, void *user_data);
+
+#else // __APPLE__
 
 #include <CoreMIDI/CoreMIDI.h>
 static void notifyProc(const MIDINotification *message, void *refCon);
@@ -93,7 +114,67 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
   }
   CloseHandle(wt);
 
-#else
+#elif __linux__
+
+  if (!rec) {
+    if (g_usbInited) {
+      g_usbInited = false;
+      plugin_register("-timer", NULL);
+      g_usbServiceThread.join();
+      libusb_exit(NULL);
+    }
+    return 0;
+  }
+  if (rec->caller_version != REAPER_PLUGIN_VERSION
+      || !loadAPI(rec->GetFunc)) 
+  {
+    return 0;
+  }
+
+  g_usbInited = true;
+  libusb_init(NULL);
+
+  if (!libusb_has_capability(LIBUSB_CAP_HAS_HOTPLUG)) {
+    ShowConsoleMsg("automidireset: Hotplug not supported by this build of libusb\n");
+    libusb_exit (NULL);
+    g_usbInited = false;
+  }
+
+  int rc;
+  if (g_usbInited) {
+    rc = libusb_hotplug_register_callback (NULL, LIBUSB_HOTPLUG_EVENT_DEVICE_ARRIVED, 0, LIBUSB_HOTPLUG_MATCH_ANY,
+                                          LIBUSB_HOTPLUG_MATCH_ANY, LIBUSB_HOTPLUG_MATCH_ANY, hotplug_callback, NULL, &g_hp[0]);
+    if (LIBUSB_SUCCESS != rc) {
+      ShowConsoleMsg("Error registering callback 0\n");
+      libusb_exit (NULL);
+      g_usbInited = false;
+    }
+  }
+
+  if (g_usbInited) {
+    rc = libusb_hotplug_register_callback (NULL, LIBUSB_HOTPLUG_EVENT_DEVICE_LEFT, 0, LIBUSB_HOTPLUG_MATCH_ANY,
+                                          LIBUSB_HOTPLUG_MATCH_ANY, LIBUSB_HOTPLUG_MATCH_ANY, hotplug_callback, NULL, &g_hp[1]);
+    if (LIBUSB_SUCCESS != rc) {
+      ShowConsoleMsg("Error registering callback 1\n");
+      libusb_exit (NULL);
+      g_usbInited = false;
+    }
+  }
+
+  if (g_usbInited) {
+    g_usbServiceThread = thread([&]() {
+      timeval tv;
+      while (g_usbInited) {
+        tv.tv_sec = 0;
+        tv.tv_usec = 500;
+        libusb_handle_events_timeout(NULL, &tv);
+        std::this_thread::sleep_for(1ms);
+      }
+    });
+    plugin_register("timer", (void*)reaperTimer);
+  }
+
+#else // __APPLE__
 
   OSStatus err;
 
@@ -367,7 +448,93 @@ DWORD WINAPI window_thread(LPVOID params)
   return 0;
 }
 
-#else // macOS
+#elif __linux__
+
+static bool g_inDelayTimer = false;
+static std::chrono::time_point<std::chrono::steady_clock> start;
+
+void reaperTimer()
+{
+  if (!g_listsInited) {
+    initLists();
+    g_listsInited = true;
+  }
+  if (g_eventReceived) {
+    start = std::chrono::steady_clock::now();
+    g_inDelayTimer = true; // this will be safe without mutexes
+    g_eventReceived = false;
+  }
+  else if (g_inDelayTimer) {
+    const auto end = std::chrono::steady_clock::now();
+    if (((end - start) / 1ms) > 1000) { // 1s delay appears to be adequate
+      midi_reinit();
+      updateLists();
+      g_inDelayTimer = false;
+    }
+  }
+}
+
+static bool is_midi_device(libusb_device *dev, struct libusb_device_descriptor *desc) 
+{
+  bool rv = false;
+
+  if (desc->bNumConfigurations) {
+    struct libusb_config_descriptor *config;
+
+    libusb_device_handle *udev;
+    int ret = libusb_open(dev, &udev);
+    if (ret) {
+      // fprintf(stderr, "Couldn't open device, some information will be missing\n");
+      udev = NULL;
+    }
+
+    for (int i = 0; i < desc->bNumConfigurations; ++i) {
+      ret = libusb_get_config_descriptor(dev, i, &config);
+      if (ret) {
+        // fprintf(stderr, "Couldn't get configuration descriptor %d, some information will be missing\n", i);
+      } 
+      else {
+        for (int j = 0; j < config->bNumInterfaces; ++j) {
+          const struct libusb_interface *interface = &config->interface[j];
+          for (int k = 0; k < interface->num_altsetting; ++k) {
+            const struct libusb_interface_descriptor *altsetting = &interface->altsetting[k];
+            if (altsetting->bInterfaceClass == LIBUSB_CLASS_AUDIO
+                && altsetting->bInterfaceSubClass == 3)
+            {
+              rv = true;
+              break;
+            }
+          }
+          if (rv) break;
+        }
+        libusb_free_config_descriptor(config);
+        if (rv) break;
+      }
+    }
+    if (udev) libusb_close(udev);
+  }
+  return rv;
+}
+
+static int hotplug_callback(libusb_context *ctx, libusb_device *dev, libusb_hotplug_event event, void *user_data) 
+{
+  struct libusb_device_descriptor desc;
+  int rc;
+
+  rc = libusb_get_device_descriptor(dev, &desc);
+  if (LIBUSB_SUCCESS != rc) {
+    // ShowConsoleMsg("Error getting device descriptor\n");
+    return 0;
+  }
+
+  if (is_midi_device(dev, &desc)) {
+    g_eventReceived = true;
+  }
+  
+  return 0;
+}
+
+#else // __APPLE__
 
 static void notifyProc(const MIDINotification *message, void *refCon)
 {

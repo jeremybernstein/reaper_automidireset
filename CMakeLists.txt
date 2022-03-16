@@ -11,8 +11,12 @@ project(reaper_automidireset
 
 set(SOURCES ./reaper_automidireset.cpp)
 set(LIBS "")
-set(CMAKE_CXX_STANDARD 11)
+set(CMAKE_CXX_STANDARD 14)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+if(UNIX AND NOT APPLE)
+    set(LINUX TRUE)
+endif()
 
 if (APPLE)
     set(CMAKE_OSX_ARCHITECTURES "x86_64;arm64" CACHE STRING "macOS architecture" FORCE)
@@ -28,10 +32,20 @@ if (WIN32)
     set(LIBS user32.lib)
 endif ()
 
+if (LINUX)
+    set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+    find_path(LIBUSB_INCLUDE_DIR 
+        NAMES libusb.h 
+        PATH_SUFFIXES "include" "libusb" "libusb-1.0")
+    find_library(LIBUSB_LIBRARY
+        NAMES usb-1.0)
+    add_definitions(-DNOMINMAX)
+    set(INCLUDES ${LIBUSB_INCLUDE_DIR})
+    set(LIBS ${LIBUSB_LIBRARY})
+endif ()
 
 add_library(automidireset SHARED ${SOURCES})
-#set_target_properties(automidireset PROPERTIES VERSION ${PROJECT_VERSION})
-target_include_directories(automidireset PRIVATE ../../WDL/WDL ../../sdk)
+target_include_directories(automidireset PRIVATE ${INCLUDES} ../../WDL/WDL ../../sdk)
 target_link_libraries(automidireset ${LIBS})
 set_target_properties(automidireset PROPERTIES PREFIX "")
 set_target_properties(automidireset PROPERTIES OUTPUT_NAME "reaper_automidireset")
