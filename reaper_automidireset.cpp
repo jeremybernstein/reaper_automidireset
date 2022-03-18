@@ -319,7 +319,7 @@ void reaperTimer()
   }
   else if (g_inDelayTimer) {
     const auto end = std::chrono::steady_clock::now();
-    if (((end - start) / 1ms) > 1000) { // 1s delay appears to be adequate
+    if (((end - start) / 1ms) > 1500) { // 1.5s delay is safe
       midi_reinit();
       updateLists();
       g_inDelayTimer = false;
