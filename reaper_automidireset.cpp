@@ -31,7 +31,7 @@
 #include "reaper_plugin_functions.h"
 #include <cstdio>
 
-#define VERSION_STRING "1.3-beta.1"
+#define VERSION_STRING "1.3-beta.2"
 
 static int commandId = 0;
 
@@ -46,7 +46,7 @@ static int commandId = 0;
 /* This is the same as KSCATEGORY_AUDIO */
 static const GUID GUID_AUDIO_DEVIFACE = {0x6994AD04L, 0x93EF, 0x11D0, {0xA3, 0xCC, 0x00, 0xA0, 0xC9, 0x22, 0x31, 0x96}};
 static WCHAR WND_CLASS_MIDI_NAME[] = L"midiDummyWindow";
-#define kMidiDeviceType ((void*) 1)
+#define kMidiDeviceType ((void *)1)
 void CALLBACK ScheduleMidiCheck(HWND hwnd, UINT uMsg, UINT timerId, DWORD dwTime);
 bool RegisterDeviceInterfaceToHwnd(HWND hwnd, HDEVNOTIFY *hDeviceNotify);
 DWORD WINAPI window_thread(LPVOID params);
@@ -62,16 +62,12 @@ HWND hDummyWindow;
 #include <libusb.h>
 
 using std::thread;
-using namespace std::literals;
 
 static libusb_hotplug_callback_handle g_hp[2];
 static thread g_usbServiceThread;
 static bool g_usbInited = false;
-static bool g_eventReceived = false;
-static bool g_listsInited = false;
 typedef void (*timer_function)();
 
-static void reaperTimer();
 static bool is_midi_device(libusb_device *dev, struct libusb_device_descriptor *desc);
 static int hotplug_callback(libusb_context *ctx, libusb_device *dev, libusb_hotplug_event event, void *user_data);
 
@@ -80,6 +76,19 @@ static int hotplug_callback(libusb_context *ctx, libusb_device *dev, libusb_hotp
 #include <CoreMIDI/CoreMIDI.h>
 static void notifyProc(const MIDINotification *message, void *refCon);
 static MIDIClientRef g_MIDIClient = 0;
+
+#endif
+
+#ifndef WIN32 // __linux__ or __APPLE__
+
+#include <atomic>
+
+using std::atomic;
+static atomic<bool> g_eventReceived;
+static atomic<bool> g_listsInited;
+
+using namespace std::literals;
+static void reaperTimer();
 
 #endif
 
@@ -171,7 +180,6 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
         std::this_thread::sleep_for(1ms);
       }
     });
-    plugin_register("timer", (void*)reaperTimer);
   }
 
 #else // __APPLE__
@@ -180,6 +188,7 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
 
   if (!rec) {
     if (g_MIDIClient) {
+      plugin_register("-timer", NULL);
       MIDIClientDispose(g_MIDIClient);
       g_MIDIClient = 0;
     }
@@ -191,15 +200,19 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
     return 0;
   }
 
-  dispatch_async(dispatch_get_main_queue(), ^{
-    initLists();
-  });
-
   // set up MIDI Client for this instance
   err = MIDIClientCreate(CFSTR("reaper_automidireset"), (MIDINotifyProc)notifyProc, NULL, &g_MIDIClient);
   if (err || !g_MIDIClient) {
     return 0;
   }
+
+#endif
+
+#ifndef WIN32 // __linux__ or __APPLE__
+
+  g_listsInited = false;
+  g_eventReceived = false;
+  plugin_register("timer", (void *)reaperTimer);
 
 #endif
 
@@ -229,7 +242,7 @@ void registerCustomAction()
   };
 
   commandId = plugin_register("custom_action", &action);
-  plugin_register("hookcommand2", (void*)&showInfo);
+  plugin_register("hookcommand2", (void *)&showInfo);
 }
 
 static void initLists()
@@ -287,6 +300,34 @@ static void updateLists()
     }
   }
 }
+
+#ifndef WIN32 // __linux__ or __APPLE__
+
+static atomic<bool> g_inDelayTimer;
+static std::chrono::time_point<std::chrono::steady_clock> start;
+
+void reaperTimer()
+{
+  if (!g_listsInited) {
+    initLists();
+    g_listsInited = true;
+  }
+  if (g_eventReceived) {
+    start = std::chrono::steady_clock::now();
+    g_inDelayTimer = true;
+    g_eventReceived = false;
+  }
+  else if (g_inDelayTimer) {
+    const auto end = std::chrono::steady_clock::now();
+    if (((end - start) / 1ms) > 1000) { // 1s delay appears to be adequate
+      midi_reinit();
+      updateLists();
+      g_inDelayTimer = false;
+    }
+  }
+}
+
+#endif
 
 #ifdef WIN32
 
@@ -450,31 +491,7 @@ DWORD WINAPI window_thread(LPVOID params)
 
 #elif __linux__
 
-static bool g_inDelayTimer = false;
-static std::chrono::time_point<std::chrono::steady_clock> start;
-
-void reaperTimer()
-{
-  if (!g_listsInited) {
-    initLists();
-    g_listsInited = true;
-  }
-  if (g_eventReceived) {
-    start = std::chrono::steady_clock::now();
-    g_inDelayTimer = true; // this will be safe without mutexes
-    g_eventReceived = false;
-  }
-  else if (g_inDelayTimer) {
-    const auto end = std::chrono::steady_clock::now();
-    if (((end - start) / 1ms) > 1000) { // 1s delay appears to be adequate
-      midi_reinit();
-      updateLists();
-      g_inDelayTimer = false;
-    }
-  }
-}
-
-static bool is_midi_device(libusb_device *dev, struct libusb_device_descriptor *desc) 
+static bool is_midi_device(libusb_device *dev, struct libusb_device_descriptor *desc)
 {
   bool rv = false;
 
@@ -539,20 +556,10 @@ static int hotplug_callback(libusb_context *ctx, libusb_device *dev, libusb_hotp
 static void notifyProc(const MIDINotification *message, void *refCon)
 {
   if (message && message->messageID == 1) {
-    if (midi_init) {
-      // REAPER requires ~1s to update its internal state, midi_reinit does not
-      dispatch_after(dispatch_time(DISPATCH_TIME_NOW, NSEC_PER_SEC), dispatch_get_main_queue(), ^{
-        midi_reinit();
-        updateLists();
-      });
-    }
-    else {
-      dispatch_async(dispatch_get_main_queue(), ^{
-        midi_reinit();
-      });
-    }
+    g_eventReceived = true;
   }
 }
+
 #endif
 
 #define REQUIRED_API(name) {(void **)&name, #name, true}
