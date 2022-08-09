@@ -31,7 +31,7 @@
 #include "reaper_plugin_functions.h"
 #include <cstdio>
 
-#define VERSION_STRING "1.3-beta.2"
+#define VERSION_STRING "1.3"
 
 static int commandId = 0;
 
@@ -135,7 +135,7 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
     return 0;
   }
   if (rec->caller_version != REAPER_PLUGIN_VERSION
-      || !loadAPI(rec->GetFunc)) 
+      || !loadAPI(rec->GetFunc))
   {
     return 0;
   }
@@ -195,7 +195,7 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
     return 0;
   }
   if (rec->caller_version != REAPER_PLUGIN_VERSION
-      || !loadAPI(rec->GetFunc)) 
+      || !loadAPI(rec->GetFunc))
   {
     return 0;
   }
@@ -237,7 +237,7 @@ void registerCustomAction()
   custom_action_register_t action {
     0,
     "SM72_AMSINFO",
-    "reaper_automidireset: Plug-and-play MIDI devices",
+    "sockmonkey72_automidireset: Plug-and-play MIDI devices",
     nullptr
   };
 
@@ -509,7 +509,7 @@ static bool is_midi_device(libusb_device *dev, struct libusb_device_descriptor *
       ret = libusb_get_config_descriptor(dev, i, &config);
       if (ret) {
         // fprintf(stderr, "Couldn't get configuration descriptor %d, some information will be missing\n", i);
-      } 
+      }
       else {
         for (int j = 0; j < config->bNumInterfaces; ++j) {
           const struct libusb_interface *interface = &config->interface[j];
@@ -533,7 +533,7 @@ static bool is_midi_device(libusb_device *dev, struct libusb_device_descriptor *
   return rv;
 }
 
-static int hotplug_callback(libusb_context *ctx, libusb_device *dev, libusb_hotplug_event event, void *user_data) 
+static int hotplug_callback(libusb_context *ctx, libusb_device *dev, libusb_hotplug_event event, void *user_data)
 {
   struct libusb_device_descriptor desc;
   int rc;
@@ -547,7 +547,7 @@ static int hotplug_callback(libusb_context *ctx, libusb_device *dev, libusb_hotp
   if (is_midi_device(dev, &desc)) {
     g_eventReceived = true;
   }
-  
+
   return 0;
 }
 
